@@ -27,18 +27,20 @@ refresh_data()
 def index():
     days = int(request.args.get("days", 7))
     upcoming = model.get_upcoming_games(days_ahead=days)
-    # extend window if nothing in range
     if not upcoming:
         upcoming = model.get_upcoming_games(days_ahead=30)
-    updated = model.last_updated.strftime("%b %d %Y %H:%M") if model.last_updated else "—"
-    return render_template("index.html", upcoming=upcoming, last_updated=updated, days=days)
+    updated     = model.last_updated.strftime("%b %d %Y %H:%M") if model.last_updated else "—"
+    champ_odds  = model.cached_champ_odds or []
+    return render_template("index.html", upcoming=upcoming, last_updated=updated,
+                           days=days, champ_odds=champ_odds, show_bracket=False)
 
 @app.route("/bracket")
 def bracket_page():
-    b = model.simulate_bracket()
-    updated = model.last_updated.strftime("%b %d %Y %H:%M") if model.last_updated else "—"
+    b           = model.simulate_bracket()
+    updated     = model.last_updated.strftime("%b %d %Y %H:%M") if model.last_updated else "—"
+    champ_odds  = model.cached_champ_odds or []
     return render_template("index.html", bracket=b, last_updated=updated,
-                           upcoming=[], days=7, show_bracket=True)
+                           upcoming=[], days=7, show_bracket=True, champ_odds=champ_odds)
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
