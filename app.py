@@ -63,5 +63,6 @@ def api_predict():
     return jsonify(model.predict_match(home, away))
 
 if __name__ == "__main__":
-    print("\n  ⚽  WC 2026 Predictor running at  http://localhost:5050\n")
-    app.run(debug=False, port=5050)
+    port = int(os.environ.get("PORT", 5050))
+    print(f"\n  ⚽  WC 2026 Predictor running at  http://localhost:{port}\n")
+    app.run(debug=False, host="0.0.0.0", port=port)
