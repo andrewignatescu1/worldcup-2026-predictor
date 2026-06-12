@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>⚽ WC 2026 AI Predictor</title>
+<style>
+:root{
+  --bg:#080c14;--card:#0f1520;--card2:#141d2b;--border:#1e2d42;
+  --gold:#f5a623;--green:#2ecc71;--red:#e74c3c;--blue:#3498db;
+  --purple:#9b59b6;--text:#e8f0fe;--muted:#6b8299;--accent:#f5a623;
+  --win-green:#27ae60;--loss-red:#c0392b;--draw-gray:#5d7290;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+
+/* ── header ── */
+.header{background:linear-gradient(135deg,#0a1628 0%,#0d1f3c 50%,#091422 100%);
+  border-bottom:2px solid var(--gold);padding:18px 24px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
+  position:sticky;top:0;z-index:100;box-shadow:0 4px 24px #000a}
+.header-left{display:flex;align-items:center;gap:14px}
+.header-logo{font-size:2rem;filter:drop-shadow(0 0 8px #f5a62388)}
+.header-title{font-size:1.4rem;font-weight:800;letter-spacing:.5px;
+  background:linear-gradient(135deg,var(--gold),#fff 60%,var(--gold));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header-sub{font-size:.75rem;color:var(--muted);margin-top:2px}
+.header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.updated-tag{font-size:.7rem;color:var(--muted);background:var(--card2);
+  border:1px solid var(--border);border-radius:20px;padding:4px 10px}
+.btn{padding:7px 16px;border-radius:8px;border:none;cursor:pointer;
+  font-size:.8rem;font-weight:600;transition:all .2s}
+.btn-gold{background:var(--gold);color:#000}
+.btn-gold:hover{background:#ffc04a;transform:translateY(-1px)}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-outline:hover{border-color:var(--gold);color:var(--gold)}
+.btn-outline.active{border-color:var(--gold);color:var(--gold);background:#f5a62318}
+
+/* ── nav tabs ── */
+.nav{background:var(--card);border-bottom:1px solid var(--border);
+  display:flex;padding:0 24px;gap:4px;overflow-x:auto}
+.nav-tab{padding:13px 20px;font-size:.85rem;font-weight:600;cursor:pointer;
+  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;
+  transition:all .2s;background:none;border-left:none;border-right:none;border-top:none}
+.nav-tab:hover{color:var(--text)}
+.nav-tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+
+/* ── layout ── */
+.container{max-width:1200px;margin:0 auto;padding:24px 16px}
+.section-title{font-size:1.1rem;font-weight:700;color:var(--gold);
+  margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border);margin-left:8px}
+
+/* ── game cards ── */
+.games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(560px,1fr));gap:20px}
+@media(max-width:620px){.games-grid{grid-template-columns:1fr}}
+
+.game-card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  overflow:hidden;transition:transform .2s,box-shadow .2s}
+.game-card:hover{transform:translateY(-2px);box-shadow:0 8px 32px #0008}
+
+.card-header{background:var(--card2);padding:10px 18px;
+  display:flex;justify-content:space-between;align-items:center;
+  border-bottom:1px solid var(--border)}
+.card-date{font-size:.75rem;color:var(--muted)}
+.card-city{font-size:.75rem;color:var(--muted)}
+
+.matchup{padding:20px 18px 14px;display:flex;align-items:center;gap:12px}
+.team-block{flex:1;text-align:center;position:relative}
+.team-flag{font-size:2.4rem;line-height:1;margin-bottom:6px}
+.team-name{font-size:.95rem;font-weight:700;line-height:1.2}
+.team-elo{font-size:.72rem;color:var(--muted);margin-top:3px}
+.elo-rank{font-size:.7rem;color:var(--gold);font-weight:600}
+.vs-block{color:var(--muted);font-weight:800;font-size:1rem;flex-shrink:0}
+
+.pick-badge{display:inline-block;background:var(--gold);color:#000;
+  font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:10px;
+  margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.pick-badge.away{background:var(--blue)}
+
+/* ── probability bars ── */
+.prob-section{padding:0 18px 14px}
+.prob-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:.78rem}
+.prob-label{width:70px;color:var(--muted);text-align:right;flex-shrink:0}
+.prob-bar-wrap{flex:1;height:8px;background:#1a2538;border-radius:4px;overflow:hidden}
+.prob-bar{height:100%;border-radius:4px;transition:width .6s ease}
+.bar-green{background:linear-gradient(90deg,var(--win-green),#52d68a)}
+.bar-gray{background:linear-gradient(90deg,var(--draw-gray),#8aa0b8)}
+.bar-red{background:linear-gradient(90deg,var(--loss-red),#e86c63)}
+.prob-pct{width:36px;font-weight:700;color:var(--text);font-size:.78rem}
+
+/* ── confidence ── */
+.conf-row{padding:0 18px 12px;display:flex;align-items:center;gap:8px}
+.conf-label{font-size:.72rem;color:var(--muted)}
+.conf-badge{font-size:.7rem;font-weight:700;padding:2px 10px;border-radius:10px}
+.conf-high{background:#27ae6022;color:var(--green);border:1px solid #27ae6055}
+.conf-mid{background:#f5a62322;color:var(--gold);border:1px solid #f5a62355}
+.conf-low{background:#e74c3c22;color:var(--red);border:1px solid #e74c3c55}
+
+/* ── stats comparison ── */
+.stats-section{padding:0 18px 14px}
+.stats-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.stats-table td{padding:5px 8px}
+.stats-table tr:nth-child(even) td{background:#ffffff06;border-radius:4px}
+.stat-label{color:var(--muted);white-space:nowrap}
+.stat-val{font-weight:600;text-align:center}
+.stat-win{color:var(--green)}
+.stat-lose{color:var(--red)}
+.stat-draw{color:var(--muted)}
+.stat-bar-cell{width:140px}
+.mini-bar-wrap{display:flex;height:5px;border-radius:3px;overflow:hidden;background:#1a2538}
+.mini-bar-h{height:100%;background:var(--green)}
+.mini-bar-a{height:100%;background:var(--red)}
+
+/* ── analysis accordion ── */
+.analysis-toggle{width:100%;background:none;border:none;border-top:1px solid var(--border);
+  padding:10px 18px;color:var(--gold);font-size:.8rem;font-weight:600;
+  cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center}
+.analysis-toggle:hover{background:#f5a62310}
+.analysis-toggle .arrow{transition:transform .3s;font-size:.7rem}
+.analysis-toggle.open .arrow{transform:rotate(180deg)}
+.analysis-body{display:none;padding:14px 18px;background:var(--card2);
+  border-top:1px solid var(--border)}
+.analysis-body.open{display:block}
+.analysis-body ul{list-style:none;display:flex;flex-direction:column;gap:8px}
+.analysis-body li{font-size:.8rem;color:#c0d0e0;line-height:1.5;
+  padding-left:14px;position:relative}
+.analysis-body li::before{content:'›';position:absolute;left:0;color:var(--gold)}
+
+/* ── form badges ── */
+.form-badge{display:inline-block;width:18px;height:18px;line-height:18px;
+  text-align:center;border-radius:3px;font-size:.65rem;font-weight:700;margin:0 1px}
+.form-W{background:var(--win-green);color:#fff}
+.form-D{background:var(--draw-gray);color:#fff}
+.form-L{background:var(--loss-red);color:#fff}
+
+/* ── no games msg ── */
+.empty-msg{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty-msg h2{font-size:1.2rem;margin-bottom:8px;color:var(--text)}
+
+/* ── bracket ── */
+.bracket-page{padding:24px 16px;max-width:1400px;margin:0 auto}
+.groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-bottom:32px}
+.group-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.group-header{background:var(--card2);padding:8px 14px;font-size:.8rem;
+  font-weight:700;color:var(--gold);border-bottom:1px solid var(--border)}
+.group-row{display:flex;align-items:center;gap:8px;padding:7px 14px;
+  border-bottom:1px solid #ffffff08;font-size:.8rem}
+.group-row.advanced{background:#2ecc7110}
+.group-row .rank{color:var(--muted);width:14px;flex-shrink:0}
+.group-row .gflag{font-size:1rem;flex-shrink:0}
+.group-row .gname{flex:1;font-weight:500;font-size:.78rem}
+.group-row .gpts{font-weight:700;color:var(--gold);font-size:.78rem}
+.group-row .gadv{color:var(--green);font-size:.7rem;font-weight:700}
+
+.rounds-scroll{overflow-x:auto;padding-bottom:12px}
+.rounds-track{display:flex;gap:0;min-width:fit-content}
+.round-col{min-width:260px;flex-shrink:0}
+.round-col:not(:last-child){border-right:1px solid var(--border)}
+.round-head{padding:12px 16px;font-size:.8rem;font-weight:700;color:var(--gold);
+  background:var(--card2);border-bottom:1px solid var(--border);text-align:center}
+.round-matches{padding:10px}
+.ko-match{background:var(--card);border:1px solid var(--border);border-radius:10px;
+  margin-bottom:10px;overflow:hidden}
+.ko-row{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:.8rem}
+.ko-row.winner{background:#2ecc7112}
+.ko-row.loser{opacity:.45}
+.ko-flag{font-size:1rem;flex-shrink:0}
+.ko-name{flex:1;font-weight:500}
+.ko-prob{font-size:.7rem;color:var(--gold);font-weight:700;flex-shrink:0}
+.ko-w-icon{color:var(--green);font-size:.75rem;flex-shrink:0}
+
+.champion-banner{text-align:center;padding:30px;background:linear-gradient(135deg,#0d1f3c,#1a2d4a);
+  border:2px solid var(--gold);border-radius:16px;margin-top:20px}
+.champion-flag{font-size:4rem;margin-bottom:8px}
+.champion-label{font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+.champion-name{font-size:2rem;font-weight:900;
+  background:linear-gradient(135deg,var(--gold),#fff 50%,var(--gold));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+
+/* ── toast ── */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--card);
+  border:1px solid var(--gold);border-radius:10px;padding:12px 18px;
+  font-size:.82rem;color:var(--text);z-index:999;opacity:0;
+  transform:translateY(10px);transition:all .3s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+
+/* ── spinner ── */
+.spin{display:inline-block;width:12px;height:12px;border:2px solid #0005;
+  border-top-color:currentColor;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── loading overlay ── */
+.loading-overlay{display:none;position:fixed;inset:0;background:#000a;
+  z-index:200;align-items:center;justify-content:center;flex-direction:column;gap:16px}
+.loading-overlay.show{display:flex}
+.loading-text{color:var(--gold);font-size:1rem;font-weight:600}
+.big-spin{width:48px;height:48px;border:4px solid #0005;border-top-color:var(--gold);
+  border-radius:50%;animation:spin .9s linear infinite}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="big-spin"></div>
+  <div class="loading-text">Refreshing latest results…</div>
+</div>
+
+<!-- ── header ── -->
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo">⚽</div>
+    <div>
+      <div class="header-title">WC 2026 AI Predictor</div>
+      <div class="header-sub">Powered by Elo ratings · Trained on 150 years of international football</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="updated-tag">Last updated: {{ last_updated }}</span>
+    <button class="btn btn-outline" id="refreshBtn" onclick="doRefresh()">↺ Refresh Data</button>
+  </div>
+</header>
+
+<!-- ── tabs ── -->
+<nav class="nav">
+  <button class="nav-tab {% if not show_bracket %}active{% endif %}" onclick="switchTab('picks',this)">🎯 Upcoming Picks</button>
+  <button class="nav-tab {% if show_bracket %}active{% endif %}" onclick="switchTab('bracket',this)">🏆 Bracket & Groups</button>
+</nav>
+
+<!-- ═══════════════════ PICKS TAB ═══════════════════ -->
+<div id="tab-picks" class="container" style="{% if show_bracket %}display:none{% endif %}">
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div class="section-title" style="margin:0">Upcoming World Cup Fixtures</div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-outline {% if days==7 %}active{% endif %}" onclick="window.location='/?days=7'">7 days</button>
+      <button class="btn btn-outline {% if days==14 %}active{% endif %}" onclick="window.location='/?days=14'">14 days</button>
+      <button class="btn btn-outline {% if days==30 %}active{% endif %}" onclick="window.location='/?days=30'">All upcoming</button>
+    </div>
+  </div>
+
+  {% if upcoming %}
+  <div class="games-grid">
+  {% for g in upcoming %}
+  <div class="game-card">
+    <!-- date / city -->
+    <div class="card-header">
+      <span class="card-date">📅 {{ g.date_str }}</span>
+      <span class="card-city">📍 {{ g.city }}</span>
+    </div>
+
+    <!-- matchup -->
+    <div class="matchup">
+      <div class="team-block">
+        <div class="team-flag">{{ g.home_flag }}</div>
+        <div class="team-name">{{ g.home }}</div>
+        <div class="team-elo">Elo {{ g.home_stats.elo }} <span class="elo-rank">#{{ g.home_stats.elo_rank }}</span></div>
+        {% if g.pick == g.home %}<div class="pick-badge">✓ Pick</div>{% endif %}
+      </div>
+
+      <div class="vs-block">VS</div>
+
+      <div class="team-block">
+        <div class="team-flag">{{ g.away_flag }}</div>
+        <div class="team-name">{{ g.away }}</div>
+        <div class="team-elo">Elo {{ g.away_stats.elo }} <span class="elo-rank">#{{ g.away_stats.elo_rank }}</span></div>
+        {% if g.pick == g.away %}<div class="pick-badge away">✓ Pick</div>{% endif %}
+      </div>
+    </div>
+
+    <!-- probability bars -->
+    <div class="prob-section">
+      <div class="prob-row">
+        <span class="prob-label">{{ g.home }} win</span>
+        <div class="prob-bar-wrap"><div class="prob-bar bar-green" style="width:{{ (g.p_home_win*100)|round|int }}%"></div></div>
+        <span class="prob-pct">{{ (g.p_home_win*100)|round|int }}%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Draw</span>
+        <div class="prob-bar-wrap"><div class="prob-bar bar-gray" style="width:{{ (g.p_draw*100)|round|int }}%"></div></div>
+        <span class="prob-pct">{{ (g.p_draw*100)|round|int }}%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">{{ g.away }} win</span>
+        <div class="prob-bar-wrap"><div class="prob-bar bar-red" style="width:{{ (g.p_away_win*100)|round|int }}%"></div></div>
+        <span class="prob-pct">{{ (g.p_away_win*100)|round|int }}%</span>
+      </div>
+    </div>
+
+    <!-- confidence -->
+    <div class="conf-row">
+      <span class="conf-label">Model confidence:</span>
+      <span class="conf-badge {{ g.confidence_cls }}">{{ g.confidence_label }}</span>
+    </div>
+
+    <!-- key stats table -->
+    <div class="stats-section">
+      <table class="stats-table">
+        <tr>
+          <td class="stat-val">
+            {% for c in g.home_stats.form_str %}<span class="form-badge form-{{c}}">{{c}}</span>{% endfor %}
+          </td>
+          <td class="stat-label" style="text-align:center">Recent Form (last 5)</td>
+          <td class="stat-val">
+            {% for c in g.away_stats.form_str %}<span class="form-badge form-{{c}}">{{c}}</span>{% endfor %}
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.gf_per_game > g.away_stats.gf_per_game %}stat-win{% elif g.home_stats.gf_per_game < g.away_stats.gf_per_game %}stat-lose{% endif %}">
+            {{ g.home_stats.gf_per_game }}
+          </td>
+          <td class="stat-label" style="text-align:center">Goals Scored / Game</td>
+          <td class="stat-val {% if g.away_stats.gf_per_game > g.home_stats.gf_per_game %}stat-win{% elif g.away_stats.gf_per_game < g.home_stats.gf_per_game %}stat-lose{% endif %}">
+            {{ g.away_stats.gf_per_game }}
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.ga_per_game < g.away_stats.ga_per_game %}stat-win{% elif g.home_stats.ga_per_game > g.away_stats.ga_per_game %}stat-lose{% endif %}">
+            {{ g.home_stats.ga_per_game }}
+          </td>
+          <td class="stat-label" style="text-align:center">Goals Conceded / Game</td>
+          <td class="stat-val {% if g.away_stats.ga_per_game < g.home_stats.ga_per_game %}stat-win{% elif g.away_stats.ga_per_game > g.home_stats.ga_per_game %}stat-lose{% endif %}">
+            {{ g.away_stats.ga_per_game }}
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.clean_sheets > g.away_stats.clean_sheets %}stat-win{% endif %}">
+            {{ g.home_stats.clean_sheets }}/10
+          </td>
+          <td class="stat-label" style="text-align:center">Clean Sheets (last 10)</td>
+          <td class="stat-val {% if g.away_stats.clean_sheets > g.home_stats.clean_sheets %}stat-win{% endif %}">
+            {{ g.away_stats.clean_sheets }}/10
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.defensive_solidity > g.away_stats.defensive_solidity %}stat-win{% elif g.home_stats.defensive_solidity < g.away_stats.defensive_solidity %}stat-lose{% endif %}">
+            {{ g.home_stats.defensive_solidity }}/100
+          </td>
+          <td class="stat-label" style="text-align:center">Defensive Rank Score</td>
+          <td class="stat-val {% if g.away_stats.defensive_solidity > g.home_stats.defensive_solidity %}stat-win{% elif g.away_stats.defensive_solidity < g.home_stats.defensive_solidity %}stat-lose{% endif %}">
+            {{ g.away_stats.defensive_solidity }}/100
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.attacking_threat > g.away_stats.attacking_threat %}stat-win{% elif g.home_stats.attacking_threat < g.away_stats.attacking_threat %}stat-lose{% endif %}">
+            {{ g.home_stats.attacking_threat }}/100
+          </td>
+          <td class="stat-label" style="text-align:center">Attacking Threat Score</td>
+          <td class="stat-val {% if g.away_stats.attacking_threat > g.home_stats.attacking_threat %}stat-win{% elif g.away_stats.attacking_threat < g.home_stats.attacking_threat %}stat-lose{% endif %}">
+            {{ g.away_stats.attacking_threat }}/100
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.set_piece_score > g.away_stats.set_piece_score %}stat-win{% elif g.home_stats.set_piece_score < g.away_stats.set_piece_score %}stat-lose{% endif %}">
+            {{ g.home_stats.set_piece_score }}/100
+          </td>
+          <td class="stat-label" style="text-align:center">Set-Piece Threat Index</td>
+          <td class="stat-val {% if g.away_stats.set_piece_score > g.home_stats.set_piece_score %}stat-win{% elif g.away_stats.set_piece_score < g.home_stats.set_piece_score %}stat-lose{% endif %}">
+            {{ g.away_stats.set_piece_score }}/100
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val" style="color:var(--muted);font-size:.72rem">{{ g.home_stats.passing_style }}</td>
+          <td class="stat-label" style="text-align:center">Playing Style</td>
+          <td class="stat-val" style="color:var(--muted);font-size:.72rem">{{ g.away_stats.passing_style }}</td>
+        </tr>
+        <tr>
+          <td class="stat-val {% if g.home_stats.wc_matches > g.away_stats.wc_matches %}stat-win{% elif g.home_stats.wc_matches < g.away_stats.wc_matches %}stat-lose{% endif %}">
+            {{ g.home_stats.wc_matches }}
+          </td>
+          <td class="stat-label" style="text-align:center">Career WC Matches</td>
+          <td class="stat-val {% if g.away_stats.wc_matches > g.home_stats.wc_matches %}stat-win{% elif g.away_stats.wc_matches < g.home_stats.wc_matches %}stat-lose{% endif %}">
+            {{ g.away_stats.wc_matches }}
+          </td>
+        </tr>
+        <tr>
+          <td class="stat-val" colspan="3" style="text-align:center;color:var(--muted);padding-top:6px">
+            H2H: {{ g.h2h.wins_home }}W – {{ g.h2h.draws }}D – {{ g.h2h.wins_away }}L
+            ({{ g.h2h.total }} meetings)
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- analysis accordion -->
+    <button class="analysis-toggle" onclick="toggleAnalysis(this)">
+      📊 Full Analysis &amp; Why <span class="arrow">▼</span>
+    </button>
+    <div class="analysis-body">
+      <ul>
+        {% for r in g.reasons %}
+        <li>{{ r|safe }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="empty-msg">
+    <h2>No upcoming fixtures in this window</h2>
+    <p>Try expanding to "All upcoming" or check back after today's games.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ═══════════════════ BRACKET TAB ═══════════════════ -->
+<div id="tab-bracket" class="bracket-page" style="{% if not show_bracket %}display:none{% endif %}">
+
+  {% if not show_bracket %}
+  <!-- lazy load bracket via JS when tab clicked -->
+  <div id="bracketPlaceholder" style="text-align:center;padding:60px;color:var(--muted)">
+    <p>Loading bracket simulation…</p>
+  </div>
+  {% else %}
+
+  <div class="section-title">Group Stage Standings</div>
+  <div class="groups-grid">
+    {% for grp, teams in bracket.groups.items() %}
+    <div class="group-card">
+      <div class="group-header">Group {{ grp }}</div>
+      {% for t in teams %}
+      <div class="group-row {% if t.advanced %}advanced{% endif %}">
+        <span class="rank">{{ loop.index }}</span>
+        <span class="gflag">{{ t.flag }}</span>
+        <span class="gname">{{ t.team }}</span>
+        <span class="gpts">{{ t.pts }}pt</span>
+        {% if t.advanced %}<span class="gadv">→</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="section-title">Knockout Bracket</div>
+  <div class="rounds-scroll">
+    <div class="rounds-track">
+      {% for rnd in bracket.rounds %}
+      <div class="round-col">
+        <div class="round-head">{{ rnd.name }}</div>
+        <div class="round-matches">
+          {% for m in rnd.matches %}
+          <div class="ko-match">
+            <div class="ko-row {% if m.winner == m.home %}winner{% else %}loser{% endif %}">
+              <span class="ko-flag">{{ m.home_flag }}</span>
+              <span class="ko-name">{{ m.home }}</span>
+              {% if m.winner == m.home %}
+              <span class="ko-prob">{{ (m.prob*100)|round|int }}%</span>
+              <span class="ko-w-icon">✓</span>
+              {% endif %}
+            </div>
+            <div class="ko-row {% if m.winner == m.away %}winner{% else %}loser{% endif %}">
+              <span class="ko-flag">{{ m.away_flag }}</span>
+              <span class="ko-name">{{ m.away }}</span>
+              {% if m.winner == m.away %}
+              <span class="ko-prob">{{ (m.prob*100)|round|int }}%</span>
+              <span class="ko-w-icon">✓</span>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="champion-banner">
+    <div class="champion-flag">{{ bracket.champion_flag }}</div>
+    <div class="champion-label">🏆 Predicted World Cup Champion</div>
+    <div class="champion-name">{{ bracket.champion }}</div>
+  </div>
+
+  {% endif %}
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function switchTab(tab, btn) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-picks').style.display   = tab==='picks'   ? '' : 'none';
+  document.getElementById('tab-bracket').style.display = tab==='bracket' ? '' : 'none';
+  if (tab === 'bracket' && document.getElementById('bracketPlaceholder')) {
+    loadBracket();
+  }
+}
+
+function toggleAnalysis(btn) {
+  btn.classList.toggle('open');
+  const body = btn.nextElementSibling;
+  body.classList.toggle('open');
+}
+
+function showToast(msg, ms=3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function doRefresh() {
+  document.getElementById('loadingOverlay').classList.add('show');
+  fetch('/api/refresh', {method:'POST'})
+    .then(r => r.json())
+    .then(() => {
+      setTimeout(() => { window.location.reload(); }, 3500);
+    })
+    .catch(() => {
+      document.getElementById('loadingOverlay').classList.remove('show');
+      showToast('Refresh failed — check your connection.');
+    });
+}
+
+function loadBracket() {
+  const ph = document.getElementById('bracketPlaceholder');
+  if (!ph) return;
+  ph.innerHTML = '<p>Simulating bracket…</p>';
+  fetch('/api/bracket')
+    .then(r => r.json())
+    .then(b => {
+      // rebuild bracket HTML client-side
+      ph.innerHTML = buildBracketHTML(b);
+    })
+    .catch(() => { ph.innerHTML = '<p>Failed to load bracket.</p>'; });
+}
+
+function buildBracketHTML(b) {
+  let html = '<div class="section-title">Group Stage Standings</div><div class="groups-grid">';
+  for (const [grp, teams] of Object.entries(b.groups)) {
+    html += `<div class="group-card"><div class="group-header">Group ${grp}</div>`;
+    teams.forEach((t,i) => {
+      html += `<div class="group-row ${t.advanced?'advanced':''}">
+        <span class="rank">${i+1}</span>
+        <span class="gflag">${t.flag}</span>
+        <span class="gname">${t.team}</span>
+        <span class="gpts">${t.pts}pt</span>
+        ${t.advanced?'<span class="gadv">→</span>':''}
+      </div>`;
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  html += '<div class="section-title">Knockout Bracket</div>';
+  html += '<div class="rounds-scroll"><div class="rounds-track">';
+  b.rounds.forEach(rnd => {
+    html += `<div class="round-col"><div class="round-head">${rnd.name}</div><div class="round-matches">`;
+    rnd.matches.forEach(m => {
+      html += `<div class="ko-match">
+        <div class="ko-row ${m.winner===m.home?'winner':'loser'}">
+          <span class="ko-flag">${m.home_flag}</span>
+          <span class="ko-name">${m.home}</span>
+          ${m.winner===m.home?`<span class="ko-prob">${Math.round(m.prob*100)}%</span><span class="ko-w-icon">✓</span>`:''}
+        </div>
+        <div class="ko-row ${m.winner===m.away?'winner':'loser'}">
+          <span class="ko-flag">${m.away_flag}</span>
+          <span class="ko-name">${m.away}</span>
+          ${m.winner===m.away?`<span class="ko-prob">${Math.round(m.prob*100)}%</span><span class="ko-w-icon">✓</span>`:''}
+        </div>
+      </div>`;
+    });
+    html += '</div></div>';
+  });
+  html += '</div></div>';
+  html += `<div class="champion-banner">
+    <div class="champion-flag">${b.champion_flag}</div>
+    <div class="champion-label">🏆 Predicted World Cup Champion</div>
+    <div class="champion-name">${b.champion}</div>
+  </div>`;
+  return html;
+}
+
+// auto-open first analysis card on load for discoverability
+document.addEventListener('DOMContentLoaded', () => {
+  const first = document.querySelector('.analysis-toggle');
+  if (first) {
+    first.classList.add('open');
+    first.nextElementSibling.classList.add('open');
+  }
+});
+</script>
+</body>
+</html>
