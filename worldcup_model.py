@@ -227,3 +227,93 @@ print(f"\nSaved {len(pred_df)} fixture predictions -> wc2026_predictions.csv")
 print("\nCurrent Elo top 12:")
 elo_now = pd.Series(elo).sort_values(ascending=False)
 print(elo_now.head(12).round(0).to_string())
+
+# ---------------------------------------------------------------- bracket simulation
+
+WC2026_GROUPS = {
+    'A': ['Mexico', 'South Korea', 'Czech Republic', 'South Africa'],
+    'B': ['Canada', 'Bosnia and Herzegovina', 'Qatar', 'Switzerland'],
+    'C': ['United States', 'Paraguay', 'Australia', 'Turkey'],
+    'D': ['Brazil', 'Morocco', 'Scotland', 'Haiti'],
+    'E': ['Germany', 'Ivory Coast', 'Ecuador', 'Curaçao'],
+    'F': ['Netherlands', 'Japan', 'Sweden', 'Tunisia'],
+    'G': ['Belgium', 'Egypt', 'Iran', 'New Zealand'],
+    'H': ['Spain', 'Cape Verde', 'Saudi Arabia', 'Uruguay'],
+    'I': ['France', 'Senegal', 'Iraq', 'Norway'],
+    'J': ['Argentina', 'Algeria', 'Austria', 'Jordan'],
+    'K': ['Portugal', 'DR Congo', 'Uzbekistan', 'Colombia'],
+    'L': ['England', 'Croatia', 'Ghana', 'Panama'],
+}
+
+played_results = {}
+for _, _row in wc2026_played.iterrows():
+    played_results[(_row.home_team, _row.away_team)] = _row.outcome
+
+def group_outcome(home, away):
+    if (home, away) in played_results:
+        return played_results[(home, away)]
+    if (away, home) in played_results:
+        return {2: 0, 1: 1, 0: 2}[played_results[(away, home)]]
+    X = pd.DataFrame([features_for(home, away, True, "FIFA World Cup")])[FEATS]
+    return int(np.argmax(final_model.predict_proba(X)[0]))
+
+def ko_winner(home, away):
+    X = pd.DataFrame([features_for(home, away, True, "FIFA World Cup")])[FEATS]
+    p_loss, p_draw, p_win = final_model.predict_proba(X)[0]
+    p_h = p_win + p_draw * p_win / (p_win + p_loss)
+    return (home, p_h) if p_h >= 0.5 else (away, 1 - p_h)
+
+def sim_round(pairs, label):
+    print(f"\n  ── {label}")
+    winners = []
+    for h, a in pairs:
+        w, p = ko_winner(h, a)
+        print(f"     {h:<28} vs  {a:<28} →  {w} ({p:.0%})")
+        winners.append(w)
+    return winners
+
+# simulate group stage
+grp_pts = {}
+grp_order = {}
+for grp, teams in WC2026_GROUPS.items():
+    pts = {t: 0 for t in teams}
+    for i, t1 in enumerate(teams):
+        for t2 in teams[i+1:]:
+            o = group_outcome(t1, t2)
+            if o == 2:   pts[t1] += 3
+            elif o == 1: pts[t1] += 1; pts[t2] += 1
+            else:        pts[t2] += 3
+    grp_pts.update(pts)
+    grp_order[grp] = sorted(teams, key=lambda t: (pts[t], elo[t]), reverse=True)
+
+print("\n" + "=" * 70)
+print("  TOURNAMENT BRACKET SIMULATION  (most-likely outcome each game)")
+print("=" * 70)
+print("\n  GROUP STAGE STANDINGS  (→ = advances)")
+for grp, teams in grp_order.items():
+    print(f"\n  Group {grp}:")
+    for i, t in enumerate(teams):
+        arrow = "  →" if i < 2 else "   "
+        print(f"    {arrow} {i+1}. {t:<28} {grp_pts[t]} pts")
+
+q1 = [grp_order[g][0] for g in WC2026_GROUPS]
+q2 = [grp_order[g][1] for g in WC2026_GROUPS]
+best3 = sorted(
+    [grp_order[g][2] for g in WC2026_GROUPS],
+    key=lambda t: (grp_pts[t], elo[t]), reverse=True
+)[:8]
+
+# seed all 32 by Elo, pair 1v32, 2v31 ...
+all_32 = sorted(q1 + q2 + best3, key=lambda t: elo[t], reverse=True)
+r32_pairs = [(all_32[i], all_32[31 - i]) for i in range(16)]
+
+print(f"\n  32 qualifiers seeded by Elo → bracket drawn as seed 1 vs 32, 2 vs 31 …")
+r16 = sim_round(r32_pairs, "ROUND OF 32")
+qf  = sim_round(list(zip(r16[::2], r16[1::2])), "ROUND OF 16")
+sf  = sim_round(list(zip(qf[::2],  qf[1::2])),  "QUARTER-FINALS")
+fin = sim_round(list(zip(sf[::2],  sf[1::2])),  "SEMI-FINALS")
+champion = sim_round([(fin[0], fin[1])], "FINAL")[0]
+
+print(f"\n{'=' * 70}")
+print(f"  PREDICTED CHAMPION: {champion}")
+print(f"{'=' * 70}")
