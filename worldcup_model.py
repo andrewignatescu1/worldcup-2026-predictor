@@ -8,6 +8,8 @@ World Cup 2026 match winner predictor
 - Predicts all remaining 2026 World Cup fixtures
 """
 
+import os
+import ssl
 import urllib.request
 import numpy as np
 import pandas as pd
@@ -21,11 +23,17 @@ HFA_ELO = 100  # Elo bonus for a true (non-neutral) home team, standard World El
 
 # ---------------------------------------------------------------- load
 RESULTS_URL = "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
-CSV_PATH = "results.csv"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(SCRIPT_DIR, "results.csv")
 
 print("Fetching latest results...", end=" ", flush=True)
 try:
-    urllib.request.urlretrieve(RESULTS_URL, CSV_PATH)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with urllib.request.urlopen(RESULTS_URL, context=ctx) as response:
+        with open(CSV_PATH, "wb") as f:
+            f.write(response.read())
     print("done.")
 except Exception as e:
     print(f"failed ({e}), using local copy.")
@@ -214,7 +222,7 @@ for r in future.itertuples(index=False):
                       elo_home=round(elo[r.home_team]), elo_away=round(elo[r.away_team])))
 
 pred_df = pd.DataFrame(preds).sort_values("date")
-pred_df.to_csv("/Users/andrewignatescu/Downloads/wc2026_predictions.csv", index=False)
+pred_df.to_csv(os.path.join(SCRIPT_DIR, "wc2026_predictions.csv"), index=False)
 print(f"\nSaved {len(pred_df)} fixture predictions -> wc2026_predictions.csv")
 print("\nCurrent Elo top 12:")
 elo_now = pd.Series(elo).sort_values(ascending=False)
