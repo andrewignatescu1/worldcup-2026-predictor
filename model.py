@@ -1,4 +1,4 @@
-import os, ssl, urllib.request
+import os, ssl, urllib.request, json
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -12,7 +12,15 @@ RESULTS_URL = "https://raw.githubusercontent.com/martj42/international_results/m
 HFA_ELO = 100
 RNG = 42
 FEATS = ["elo_diff", "is_home", "defense_diff", "wc_exp_diff",
-         "elo_momentum_diff", "streak_diff"]
+         "elo_momentum_diff", "streak_diff", "h2h_wc_score"]
+
+# ESPN team name → model team name
+_ESPN_NAME_MAP = {
+    "USA": "United States", "Korea Republic": "South Korea",
+    "Côte d'Ivoire": "Ivory Coast", "Cote d'Ivoire": "Ivory Coast",
+    "Congo DR": "DR Congo", "Bosnia & Herzegovina": "Bosnia and Herzegovina",
+}
+def _espn_name(n): return _ESPN_NAME_MAP.get(n, n)
 
 WC2026_GROUPS = {
     'A': ['Mexico', 'South Korea', 'Czech Republic', 'South Africa'],
@@ -49,6 +57,7 @@ FLAGS = {
 elo          = defaultdict(lambda: 1500.0)
 recent       = defaultdict(lambda: deque(maxlen=10))
 h2h          = defaultdict(lambda: [0, 0, 0])
+h2h_detailed = defaultdict(list)   # [{year,home,result,tournament,is_wc}] per pair
 wc_matches   = defaultdict(int)
 elo_history  = defaultdict(lambda: deque(maxlen=6))   # elo BEFORE each match
 streak       = defaultdict(int)                        # +N = win streak, -N = loss streak
@@ -62,6 +71,7 @@ last_updated      = None
 cached_champ_odds = None
 _prob_cache       = {}     # precomputed matchup probabilities for Monte Carlo
 _wc_percentiles   = {}     # percentile-based att/def scores for all 48 WC teams
+_expert_cache     = {}     # (home, away) -> {probs, ts} from ESPN/odds API
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -84,6 +94,45 @@ def mov_mult(gd):
 def pair_key(a, b):
     return (a, b) if a < b else (b, a)
 
+def h2h_wc_weighted_score(home, away, current_year=2026):
+    """
+    Weighted H2H score from home team's perspective.
+    - Only last 20 years count
+    - WC matches worth 3x, qualifiers 1.5x, friendlies 0.5x, other 1x
+    - Exponential recency decay: 0.88^years_ago
+    Returns value in [-1, +1]; positive = home historically dominates
+    """
+    k = pair_key(home, away)
+    meetings = h2h_detailed[k]
+    if not meetings:
+        return 0.0
+    cutoff = current_year - 20
+    score = total_w = 0.0
+    for m in meetings:
+        if m["year"] < cutoff:
+            continue
+        t = m["tournament"].lower()
+        if m["is_wc"]:
+            tw = 3.0
+        elif "qualification" in t:
+            tw = 1.5
+        elif t == "friendly":
+            tw = 0.5
+        else:
+            tw = 1.0
+        recency = 0.88 ** (current_year - m["year"])
+        w = tw * recency
+        is_home = (m["home"] == home)
+        if m["result"] == "home_win":
+            outcome = 1.0 if is_home else -1.0
+        elif m["result"] == "away_win":
+            outcome = -1.0 if is_home else 1.0
+        else:
+            outcome = 0.0
+        score    += w * outcome
+        total_w  += w
+    return score / total_w if total_w > 0 else 0.0
+
 def features_for(home, away, neutral, tournament):
     e_h, e_a = elo[home], elo[away]
     is_home  = 0.0 if neutral else 1.0
@@ -91,8 +140,13 @@ def features_for(home, away, neutral, tournament):
     rh, ra = recent[home], recent[away]
     def agg(dq):
         if not dq: return 1.0, 1.2, 1.2
-        arr = np.array(dq)
-        return arr[:, 0].mean(), arr[:, 1].mean(), arr[:, 2].mean()
+        items = list(dq)
+        n = len(items)
+        # exponential recency weights — more recent matches count more
+        w = np.array([0.82 ** (n - 1 - i) for i in range(n)])
+        w /= w.sum()
+        arr = np.array(items)
+        return float((arr[:, 0] * w).sum()), float((arr[:, 1] * w).sum()), float((arr[:, 2] * w).sum())
     pts_h, gf_h, ga_h = agg(rh)
     pts_a, gf_a, ga_a = agg(ra)
 
@@ -117,12 +171,13 @@ def features_for(home, away, neutral, tournament):
         defense_diff      = ga_a - ga_h,
         h2h_score         = h2h_score,
         h2h_n             = np.log1p(n),
+        h2h_wc_score      = h2h_wc_weighted_score(home, away),
         wc_exp_diff       = np.log1p(wc_matches[home]) - np.log1p(wc_matches[away]),
         elo_momentum_diff = mom_h - mom_a,
         streak_diff       = float(streak[home] - streak[away]),
     )
 
-def update_state(home, away, hs, as_, neutral, tournament):
+def update_state(home, away, hs, as_, neutral, tournament, date=None):
     # record elo snapshot BEFORE this match (used for momentum)
     elo_history[home].append(elo[home])
     elo_history[away].append(elo[away])
@@ -162,7 +217,15 @@ def update_state(home, away, hs, as_, neutral, tournament):
     all_matches.append({
         "home": home, "away": away,
         "hs": hs, "as_": as_,
-        "date": None, "tournament": tournament,
+        "date": date, "tournament": tournament,
+    })
+
+    # Detailed H2H record for WC-weighted scoring
+    year = date.year if date is not None else 2000
+    result_str = "home_win" if hs > as_ else ("draw" if hs == as_ else "away_win")
+    h2h_detailed[pair_key(home, away)].append({
+        "year": year, "home": home, "result": result_str,
+        "tournament": tournament, "is_wc": (tournament == "FIFA World Cup"),
     })
 
 def fit(data):
@@ -183,17 +246,19 @@ def fit(data):
 # ── load & train ─────────────────────────────────────────────────────────────
 
 def load_and_train(csv_path):
-    global elo, recent, h2h, wc_matches, elo_history, streak, all_matches
+    global elo, recent, h2h, h2h_detailed, wc_matches, elo_history, streak, all_matches
     global final_model, train_df, future_df, played_wc2026
-    global last_updated, cached_champ_odds, _prob_cache, _wc_percentiles
+    global last_updated, cached_champ_odds, _prob_cache, _wc_percentiles, _expert_cache
 
-    elo         = defaultdict(lambda: 1500.0)
-    recent      = defaultdict(lambda: deque(maxlen=10))
-    h2h         = defaultdict(lambda: [0, 0, 0])
-    wc_matches  = defaultdict(int)
-    elo_history = defaultdict(lambda: deque(maxlen=6))
-    streak      = defaultdict(int)
-    all_matches = []
+    elo          = defaultdict(lambda: 1500.0)
+    recent       = defaultdict(lambda: deque(maxlen=10))
+    h2h          = defaultdict(lambda: [0, 0, 0])
+    h2h_detailed = defaultdict(list)
+    wc_matches   = defaultdict(int)
+    elo_history  = defaultdict(lambda: deque(maxlen=6))
+    streak       = defaultdict(int)
+    all_matches  = []
+    _expert_cache = {}
 
     df = pd.read_csv(csv_path, parse_dates=["date"])
     df = df.sort_values("date").reset_index(drop=True)
@@ -213,7 +278,7 @@ def load_and_train(csv_path):
             })
             rows.append(f)
         update_state(r.home_team, r.away_team, r.home_score, r.away_score,
-                     r.neutral, r.tournament)
+                     r.neutral, r.tournament, r.date)
 
     train_df      = pd.DataFrame(rows)
     final_model   = fit(train_df)
@@ -223,6 +288,108 @@ def load_and_train(csv_path):
     _prob_cache       = _build_prob_cache()
     _wc_percentiles   = _build_wc_percentiles()
     cached_champ_odds = monte_carlo_champion(n_sims=2000)
+
+
+# ── Expert / market consensus ─────────────────────────────────────────────────
+
+_EXPERT_TTL = 21600  # 6 hours
+
+def fetch_expert_probs(home, away):
+    """
+    Returns [p_away_win, p_draw, p_home_win] blended from two sources:
+      1. ESPN public scoreboard API (no key needed)
+      2. The Odds API (set env ODDS_API_KEY for free-tier access)
+    Returns None if neither source yields data.
+    """
+    key = (home, away)
+    cached = _expert_cache.get(key)
+    if cached:
+        age = (pd.Timestamp.now() - cached["ts"]).total_seconds()
+        if age < _EXPERT_TTL:
+            return cached.get("probs")
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    # ── Source 1: ESPN scoreboard (win-probability predictor field) ───────────
+    try:
+        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+        with urllib.request.urlopen(url, context=ctx, timeout=6) as resp:
+            data = json.loads(resp.read())
+        for event in data.get("events", []):
+            for comp in event.get("competitions", []):
+                competitors = comp.get("competitors", [])
+                names = {c["homeAway"]: _espn_name(c.get("team", {}).get("displayName", ""))
+                         for c in competitors}
+                if (names.get("home") == home and names.get("away") == away) or \
+                   (names.get("home") == away  and names.get("away") == home):
+                    pred = comp.get("predictor", {})
+                    ht   = pred.get("homeTeam", {})
+                    at   = pred.get("awayTeam", {})
+                    gp_h = ht.get("gameProjection")
+                    gp_a = at.get("gameProjection")
+                    tie  = ht.get("teamChanceTie")
+                    if gp_h and gp_a and tie:
+                        ph   = float(gp_h) / 100
+                        pa   = float(gp_a) / 100
+                        pd_  = float(tie)  / 100
+                        tot  = ph + pa + pd_
+                        ph /= tot; pa /= tot; pd_ /= tot
+                        # align to our convention: [p_loss, p_draw, p_win] for home
+                        if names.get("home") == home:
+                            probs = [pa, pd_, ph]
+                        else:
+                            probs = [ph, pd_, pa]
+                        _expert_cache[key] = {"probs": probs, "ts": pd.Timestamp.now()}
+                        return probs
+    except Exception:
+        pass
+
+    # ── Source 2: The Odds API (optional, set ODDS_API_KEY env var) ───────────
+    api_key = os.environ.get("ODDS_API_KEY", "")
+    if api_key:
+        try:
+            odds_url = (
+                f"https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds/"
+                f"?apiKey={api_key}&regions=us,uk&markets=h2h&oddsFormat=decimal"
+            )
+            with urllib.request.urlopen(odds_url, context=ctx, timeout=6) as resp:
+                events = json.loads(resp.read())
+            for ev in events:
+                ht = _espn_name(ev.get("home_team", ""))
+                at = _espn_name(ev.get("away_team", ""))
+                if not ({ht, at} == {home, away}):
+                    continue
+                # average implied probs across bookmakers
+                home_imp, away_imp, draw_imp, cnt = 0.0, 0.0, 0.0, 0
+                for bk in ev.get("bookmakers", []):
+                    for mkt in bk.get("markets", []):
+                        if mkt.get("key") != "h2h":
+                            continue
+                        odds_map = {o["name"]: 1.0 / o["price"]
+                                    for o in mkt.get("outcomes", []) if o.get("price")}
+                        h_imp = odds_map.get(ht, odds_map.get(home, 0))
+                        a_imp = odds_map.get(at, odds_map.get(away, 0))
+                        d_imp = odds_map.get("Draw", 0)
+                        if h_imp and a_imp and d_imp:
+                            tot = h_imp + a_imp + d_imp
+                            home_imp += h_imp / tot
+                            away_imp += a_imp / tot
+                            draw_imp += d_imp / tot
+                            cnt += 1
+                if cnt:
+                    home_imp /= cnt; away_imp /= cnt; draw_imp /= cnt
+                    if ht == home:
+                        probs = [away_imp, draw_imp, home_imp]
+                    else:
+                        probs = [home_imp, draw_imp, away_imp]
+                    _expert_cache[key] = {"probs": probs, "ts": pd.Timestamp.now()}
+                    return probs
+        except Exception:
+            pass
+
+    return None
 
 
 # ── Monte Carlo championship simulation ──────────────────────────────────────
@@ -445,6 +612,23 @@ def predict_match(home, away, neutral=True):
     X = pd.DataFrame([f])[FEATS]
     p_loss, p_draw, p_win = final_model.predict_proba(X)[0]
 
+    # Blend expert/market consensus when available (25% weight)
+    expert_used = False
+    expert_probs_raw = None
+    try:
+        ep = fetch_expert_probs(home, away)
+        if ep:
+            expert_probs_raw = ep
+            W = 0.25
+            p_loss = (1 - W) * p_loss + W * ep[0]
+            p_draw = (1 - W) * p_draw + W * ep[1]
+            p_win  = (1 - W) * p_win  + W * ep[2]
+            tot = p_loss + p_draw + p_win
+            p_loss /= tot; p_draw /= tot; p_win /= tot
+            expert_used = True
+    except Exception:
+        pass
+
     ranked    = _elo_sorted()
     elo_rank_h = ranked.index(home) + 1 if home in ranked else "—"
     elo_rank_a = ranked.index(away) + 1 if away in ranked else "—"
@@ -545,23 +729,41 @@ def predict_match(home, away, neutral=True):
     elif sp_a > sp_h + 20:
         reasons.append(f"<b>{away}</b> has a higher set-piece threat index ({sp_a} vs {sp_h}/100).")
 
-    # 8 — head-to-head
-    h2h_s = get_h2h(home, away)
-    tot   = h2h_s["total"]
-    if tot >= 5:
+    # 8 — head-to-head (WC-weighted, last 20 years, recency decayed)
+    h2h_s     = get_h2h(home, away)
+    tot       = h2h_s["total"]
+    wc_score  = h2h_wc_weighted_score(home, away)
+    k         = pair_key(home, away)
+    wc_meetings = [m for m in h2h_detailed[k] if m["is_wc"] and m["year"] >= 2006]
+    if wc_meetings:
+        wc_home_w = sum(1 for m in wc_meetings if
+                        (m["home"] == home and m["result"] == "home_win") or
+                        (m["home"] == away and m["result"] == "away_win"))
+        wc_away_w = sum(1 for m in wc_meetings if
+                        (m["home"] == away and m["result"] == "home_win") or
+                        (m["home"] == home and m["result"] == "away_win"))
+        wc_d      = len(wc_meetings) - wc_home_w - wc_away_w
+        dominant  = home if wc_home_w > wc_away_w else (away if wc_away_w > wc_home_w else None)
+        suffix    = " (weighted heavier in our model)" if dominant else ""
+        reasons.append(
+            f"<b>WC knockout H2H (2006–present):</b> {home} {wc_home_w}W–{wc_d}D–{wc_away_w}L vs {away}"
+            + (f" — <b>{dominant}</b> has historically performed better in World Cup pressure{suffix}." if dominant else ".")
+        )
+    elif tot >= 5:
         wh, wa, dd = h2h_s["wins_home"], h2h_s["wins_away"], h2h_s["draws"]
-        if wh > wa + 1:
-            reasons.append(f"<b>{home}</b> dominates the all-time H2H "
-                           f"({wh}W–{dd}D–{wa}L across {tot} meetings).")
-        elif wa > wh + 1:
-            reasons.append(f"<b>{away}</b> dominates the all-time H2H "
-                           f"({wa}W–{dd}D–{wh}L across {tot} meetings).")
-        else:
-            reasons.append(f"H2H is evenly balanced ({wh}W–{dd}D–{wa}L across {tot} meetings).")
+        desc = (f"<b>{home}</b> dominates the all-time H2H ({wh}W–{dd}D–{wa}L, {tot} meetings)."
+                if wh > wa + 1 else
+                f"<b>{away}</b> dominates the all-time H2H ({wa}W–{dd}D–{wh}L, {tot} meetings)."
+                if wa > wh + 1 else
+                f"H2H balanced ({wh}W–{dd}D–{wa}L across {tot} meetings).")
+        reasons.append(
+            desc + (f" WC-weighted recent H2H score: <b>{home}</b> {'favoured' if wc_score > 0.1 else ('neutral' if abs(wc_score) <= 0.1 else 'unfavoured')}."
+                    if abs(wc_score) > 0.05 else "")
+        )
     elif tot > 0:
-        reasons.append(f"Only {tot} prior meeting(s) between these sides.")
+        reasons.append(f"Only {tot} prior meeting(s) between these sides — limited H2H sample.")
     else:
-        reasons.append("These teams have never faced each other before.")
+        reasons.append("These teams have never met — no H2H history to draw from.")
 
     # 9 — WC experience
     wc_h, wc_a = wc_matches[home], wc_matches[away]
@@ -575,6 +777,19 @@ def predict_match(home, away, neutral=True):
     # 10 — playing style
     reasons.append(f"Playing styles: <b>{home}</b> → <i>{hs['passing_style']}</i> · "
                    f"<b>{away}</b> → <i>{as_['passing_style']}</i>.")
+
+    # 11 — expert / market consensus (when available)
+    if expert_used and expert_probs_raw:
+        mkt_win  = round(expert_probs_raw[2] * 100)
+        mkt_loss = round(expert_probs_raw[0] * 100)
+        mkt_draw = round(expert_probs_raw[1] * 100)
+        favoured = home if expert_probs_raw[2] >= expert_probs_raw[0] else away
+        reasons.append(
+            f"<b>Market/Expert consensus</b> (live betting odds aggregated): "
+            f"{home} {mkt_win}% · Draw {mkt_draw}% · {away} {mkt_loss}% — "
+            f"<b>{favoured}</b> is the current market favourite. "
+            f"This signal (25% weight) incorporates thousands of expert bettors' analysis."
+        )
 
     pick      = home if p_win >= p_loss else away
     conf_pct  = max(float(p_win), float(p_loss))
