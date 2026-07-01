@@ -397,7 +397,7 @@ body::before{
 
     <!-- date / city -->
     <div class="card-header">
-      <span class="card-date">📅 {{ g.date_str }}</span>
+      <span class="card-date">📅 {{ g.date_str }}{% if g.live %} <span style="color:#ef4444;font-weight:700">● LIVE</span>{% endif %}</span>
       <span class="card-city">📍 {{ g.city }}</span>
     </div>
 

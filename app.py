@@ -1,4 +1,4 @@
-import os, ssl, urllib.request, threading
+import os, ssl, time, urllib.request, threading
 from flask import Flask, render_template, jsonify, request
 import model
 
@@ -22,6 +22,20 @@ def refresh_data():
 
 # Load on startup
 refresh_data()
+
+# Auto-refresh: re-fetch results & retrain every N hours (default 6),
+# so the model updates daily as new wins are recorded — no manual action needed.
+REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_HOURS", "6")) * 3600
+
+def _auto_refresh_loop():
+    while True:
+        time.sleep(REFRESH_INTERVAL)
+        try:
+            refresh_data()
+        except Exception:
+            pass
+
+threading.Thread(target=_auto_refresh_loop, daemon=True).start()
 
 @app.route("/")
 def index():

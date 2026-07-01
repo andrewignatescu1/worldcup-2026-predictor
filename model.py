@@ -392,6 +392,57 @@ def fetch_expert_probs(home, away):
     return None
 
 
+# ── live fixture schedule from ESPN ──────────────────────────────────────────
+# The historical results.csv only contains *played* matches, so upcoming
+# knockout fixtures must come from ESPN's scoreboard (supports date ranges).
+
+_fixture_cache = {"ts": None, "rows": []}
+_FIXTURE_TTL   = 3600  # 1 hour
+
+def fetch_espn_fixtures(days_ahead=30):
+    """Scheduled / in-progress WC matches for the next `days_ahead` days."""
+    now = pd.Timestamp.now()
+    if _fixture_cache["ts"] is not None and \
+       (now - _fixture_cache["ts"]).total_seconds() < _FIXTURE_TTL:
+        return _fixture_cache["rows"]
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    start = now.normalize()
+    end   = start + pd.Timedelta(days=max(days_ahead, 30))
+    url = ("https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+           f"?dates={start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}")
+    rows = []
+    try:
+        with urllib.request.urlopen(url, context=ctx, timeout=10) as resp:
+            data = json.loads(resp.read())
+        for event in data.get("events", []):
+            comp  = (event.get("competitions") or [{}])[0]
+            state = comp.get("status", {}).get("type", {}).get("state", "")
+            if state == "post":          # already played
+                continue
+            names = {c.get("homeAway"): _espn_name(c.get("team", {}).get("displayName", ""))
+                     for c in comp.get("competitors", [])}
+            home, away = names.get("home"), names.get("away")
+            if not home or not away:
+                continue
+            try:
+                d = pd.Timestamp(event.get("date", ""))
+                if d.tzinfo is not None:
+                    d = d.tz_convert(None)
+            except Exception:
+                continue
+            city = ((comp.get("venue") or {}).get("address") or {}).get("city", "")
+            rows.append({"date": d, "home_team": home, "away_team": away,
+                         "city": city, "live": state == "in"})
+    except Exception:
+        return _fixture_cache["rows"]    # stale cache beats nothing
+    _fixture_cache["ts"]   = now
+    _fixture_cache["rows"] = rows
+    return rows
+
+
 # ── Monte Carlo championship simulation ──────────────────────────────────────
 
 def _build_prob_cache():
@@ -823,20 +874,44 @@ def predict_match(home, away, neutral=True):
 
 
 def get_upcoming_games(days_ahead=7):
+    today  = pd.Timestamp.now().normalize()
+    cutoff = today + pd.Timedelta(days=days_ahead + 1)   # include full cutoff day
+    hosts  = {"United States", "Mexico", "Canada"}
+
+    # Primary source: live ESPN schedule (covers knockout rounds)
+    results, seen = [], set()
+    for f in sorted(fetch_espn_fixtures(days_ahead), key=lambda x: x["date"]):
+        if not (today <= f["date"] < cutoff):
+            continue
+        key = (f["home_team"], f["away_team"])
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            pred = predict_match(f["home_team"], f["away_team"],
+                                 f["home_team"] not in hosts)
+        except Exception:
+            continue
+        pred["date_str"] = f["date"].strftime("%b %d, %Y")
+        pred["city"]     = f["city"]
+        pred["live"]     = f["live"]
+        results.append(pred)
+    if results:
+        return results
+
+    # Fallback: any unplayed rows in the historical dataset
     if future_df is None:
         return []
-    today  = pd.Timestamp.now().normalize()
-    cutoff = today + pd.Timedelta(days=days_ahead)
-    mask   = (
+    mask = (
         (future_df.tournament == "FIFA World Cup") &
         (future_df.date >= today) &
-        (future_df.date <= cutoff)
+        (future_df.date < cutoff)
     )
-    results = []
     for r in future_df[mask].sort_values("date").itertuples(index=False):
         pred = predict_match(r.home_team, r.away_team, r.neutral)
         pred["date_str"] = r.date.strftime("%b %d, %Y")
         pred["city"]     = r.city
+        pred["live"]     = False
         results.append(pred)
     return results
 
