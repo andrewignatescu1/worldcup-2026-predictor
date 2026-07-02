@@ -427,6 +427,9 @@ def fetch_espn_fixtures(days_ahead=30):
             home, away = names.get("home"), names.get("away")
             if not home or not away:
                 continue
+            # Skip TBD placeholders like "Round of 32 11 Winner"
+            if home not in FLAGS or away not in FLAGS:
+                continue
             try:
                 d = pd.Timestamp(event.get("date", ""))
                 if d.tzinfo is not None:
